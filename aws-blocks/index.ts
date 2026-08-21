@@ -96,7 +96,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async createPantryItem(input: PantryItemInput) {
     const user = await auth.requireAuth(context);
-    const userSub = user.userId;
+    const userSub = user.userSub;
     const parsedInput = pantryItemInputSchema.parse(input);
     const item = await pantry.create(userSub, parsedInput);
     logger.info('Pantry operation', {
@@ -110,7 +110,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async listPantryItems(includeArchived?: boolean) {
     const user = await auth.requireAuth(context);
-    const userSub = user.userId;
+    const userSub = user.userSub;
     const parsedIncludeArchived = z.boolean().default(false).parse(includeArchived);
     const items = await pantry.list(userSub, parsedIncludeArchived);
     logger.info('Pantry operation', {
@@ -122,7 +122,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async updatePantryItem(itemId: string, expectedVersion: number, patch: PantryItemPatch) {
     const user = await auth.requireAuth(context);
-    const userSub = user.userId;
+    const userSub = user.userSub;
     const parsedItemId = itemIdSchema.parse(itemId);
     const parsedVersion = versionSchema.parse(expectedVersion);
     const parsedPatch = pantryItemPatchSchema.parse(patch);
@@ -142,7 +142,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     outcome: 'consumed' | 'discarded',
   ) {
     const user = await auth.requireAuth(context);
-    const userSub = user.userId;
+    const userSub = user.userSub;
     const parsedItemId = itemIdSchema.parse(itemId);
     const parsedVersion = versionSchema.parse(expectedVersion);
     const parsedOutcome = outcomeSchema.parse(outcome);
@@ -160,7 +160,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async restorePantryItem(itemId: string, expectedVersion: number) {
     const user = await auth.requireAuth(context);
-    const userSub = user.userId;
+    const userSub = user.userSub;
     const parsedItemId = itemIdSchema.parse(itemId);
     const parsedVersion = versionSchema.parse(expectedVersion);
     const item = await pantry.restore(userSub, parsedItemId, parsedVersion);

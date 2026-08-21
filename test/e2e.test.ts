@@ -127,6 +127,11 @@ test('user A signs up through local confirmation and creates milk at version one
   assert.strictEqual(milk.version, 1);
   assert.strictEqual(milk.normalizedName, 'whole milk');
   assert.strictEqual(milk.state, 'active');
+  const authState = await authApi.getAuthState();
+  assert.strictEqual(authState.state, 'signedIn');
+  const signedInUser = (authState as unknown as { user: { userSub: string } }).user;
+  assert.strictEqual(milk.userSub, signedInUser.userSub);
+  assert.notStrictEqual(milk.userSub, 'pantry-a@example.com');
   assert.ok(milk.itemId);
   milkItemId = milk.itemId;
   milkVersion = milk.version;
