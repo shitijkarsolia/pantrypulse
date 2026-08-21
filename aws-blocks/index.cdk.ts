@@ -14,6 +14,7 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const stackName = getStackName({ sandbox: sandboxMode, projectRoot });
 export const blocksStack = await BlocksStack.create(app, stackName, {
+  env: { region: 'us-east-2' },
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
   defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,
