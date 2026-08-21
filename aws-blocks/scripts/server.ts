@@ -3,9 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const port = Number(process.env.BLOCKS_DEV_PORT ?? 3000);
+const frontendPort = Number(process.env.BLOCKS_FRONTEND_PORT ?? 3100);
 
 startDevServer({
   backendPath: join(__dirname, '..', 'index.ts'),
-  frontendCommand: 'npx vite --port 3100 --strictPort',
-  frontendPort: 3100,
+  port,
+  frontendCommand: `npx vite --port ${frontendPort} --strictPort`,
+  frontendPort,
 });

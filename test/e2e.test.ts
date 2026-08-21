@@ -1,54 +1,84 @@
-/**
- * End-to-end tests — tests the API via direct imports (same typed client the frontend uses).
- *
- * Run:  npm run test:e2e
- *
- * Structure:
- *   - Setup (starts dev server, imports client) — don't touch
- *   - Auth tests
- *   - CRUD tests
- *   - Conditional write / conflict tests
- *   - Realtime tests
- *
- * To add tests: copy any test block, rename, change the assertion. The setup
- * boilerplate handles server lifecycle — you just call api.* methods.
- */
-import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { test } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
 
-// Install cookie jar before importing the API client — Node's fetch doesn't
-// persist cookies between requests, which breaks authenticated API calls.
 installCookieJar();
+
+const SERVER_PORT = 3200;
+const FRONTEND_PORT = 3201;
+const TEST_PASSWORD = 'PantryTest123!';
 
 let server: ChildProcess | null = null;
 let api: typeof ApiType;
 let authApi: typeof AuthApiType;
+let milkItemId = '';
+let milkVersion = 0;
 
-// ─── Setup (don't touch) ─────────────────────────────────────────────────────
+function resetLocalTestData(): void {
+  for (const fullId of ['pantrypulse-auth', 'pantrypulse-auth-sessions', 'pantrypulse-pantry-data']) {
+    rmSync(join(process.cwd(), '.bb-data', fullId), { recursive: true, force: true });
+  }
+}
+
+async function createConfirmedTestUser(username: string): Promise<void> {
+  const state = await authApi.setAuthState({
+    action: 'signUp',
+    username,
+    password: TEST_PASSWORD,
+  });
+  assert.strictEqual(state.state, 'confirmingSignUp');
+
+  const issued = await api.getLastCode();
+  assert.ok(issued?.code);
+  assert.strictEqual(issued.username, username);
+
+  const confirmed = await authApi.setAuthState({
+    action: 'confirmSignUp',
+    username,
+    code: issued.code,
+    password: TEST_PASSWORD,
+  });
+  assert.strictEqual(confirmed.state, 'confirmingSignUp');
+  assert.ok(confirmed.actions.some((action) => action.name === 'autoSignIn'));
+
+  const signedIn = await authApi.setAuthState({
+    action: 'autoSignIn',
+    username,
+  });
+  assert.strictEqual(signedIn.state, 'signedIn');
+}
 
 test.before(async () => {
-  // Use existing dev server if running, otherwise start one
-  if (!await isServerRunning()) {
+  if (!await isServerRunning(SERVER_PORT)) {
+    resetLocalTestData();
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
-      env: { ...process.env, NODE_OPTIONS: '' },
+      env: {
+        ...process.env,
+        BLOCKS_DEV_PORT: String(SERVER_PORT),
+        BLOCKS_FRONTEND_PORT: String(FRONTEND_PORT),
+        NODE_OPTIONS: '',
+      },
     });
+    server.stdout?.resume();
+    server.stderr?.resume();
     server.unref();
     await setTimeout(2000);
   }
 
+  process.env.BLOCKS_API_URL = `http://localhost:${SERVER_PORT}/aws-blocks/api`;
   const mod = await import('aws-blocks');
   api = mod.api;
   authApi = mod.authApi;
 
-  // Wait for server readiness
-  for (let i = 0; i < 30; i++) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
       await authApi.getAuthState();
       return;
@@ -56,133 +86,96 @@ test.before(async () => {
       await setTimeout(1000);
     }
   }
-  throw new Error('Dev server did not become ready within 30s');
+  throw new Error('Dev server did not become ready within 30 seconds');
 });
 
 test.after(() => {
   if (server?.pid) {
-    try { process.kill(-server.pid, 'SIGTERM'); } catch {}
+    try {
+      process.kill(-server.pid, 'SIGTERM');
+    } catch {
+      // The server already stopped.
+    }
   }
 });
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
-
-test('auth: starts signed out', async () => {
-  const state = await authApi.getAuthState();
-  assert.strictEqual(state.state, 'signedOut');
+test('health endpoint reports that the PantryPulse API is ready', async () => {
+  assert.deepStrictEqual(await api.ping(), { status: 'ok' });
 });
 
-test('auth: sign up creates account and signs in', async () => {
-  const state = await authApi.setAuthState({
-    action: 'signUp',
-    username: 'testuser@example.com',
-    password: 'TestPass123!',
-  });
-  assert.strictEqual(state.state, 'signedIn');
-  assert.strictEqual(state.user?.username, 'testuser@example.com');
-});
-
-test('auth: unauthenticated access is rejected', async () => {
-  // Sign out first
-  await authApi.setAuthState({ action: 'signOut' });
-
+test('pantry rejects list access while signed out', async () => {
+  assert.strictEqual((await authApi.getAuthState()).state, 'signedOut');
   await assert.rejects(
-    () => api.listTodos(),
-    (err: any) => err.message.includes('Authentication') || err.message.includes('Session') || err.message.includes('401'),
+    () => api.listPantryItems(),
+    (error: any) => /Authentication|Session|NotAuthenticated|401/i.test(error.message),
   );
+});
 
-  // Sign back in for remaining tests
-  await authApi.setAuthState({
-    action: 'signIn',
-    username: 'testuser@example.com',
-    password: 'TestPass123!',
+test('user A signs up through local confirmation and creates milk at version one', async () => {
+  await createConfirmedTestUser('pantry-a@example.com');
+
+  const milk = await api.createPantryItem({
+    name: '  Whole   Milk  ',
+    category: 'dairy',
+    quantity: 1,
+    unit: 'carton',
+    storage: 'fridge',
+    addedDate: '2026-08-21',
+    expiryDate: '2026-08-28',
   });
+
+  assert.strictEqual(milk.version, 1);
+  assert.strictEqual(milk.normalizedName, 'whole milk');
+  assert.strictEqual(milk.state, 'active');
+  assert.ok(milk.itemId);
+  milkItemId = milk.itemId;
+  milkVersion = milk.version;
 });
 
-// ─── CRUD ─────────────────────────────────────────────────────────────────────
+test('user A updates milk with the expected version', async () => {
+  const updated = await api.updatePantryItem(milkItemId, milkVersion, { quantity: 2 });
 
-test('todos: create with priority', async () => {
-  const todo = await api.createTodo('Buy milk', 1);
-  assert.strictEqual(todo.title, 'Buy milk');
-  assert.strictEqual(todo.priority, 1);
-  assert.strictEqual(todo.completed, false);
-  assert.strictEqual(todo.version, 1);
-  assert.ok(todo.todoId);
+  assert.strictEqual(updated.quantity, 2);
+  assert.strictEqual(updated.version, 2);
+  milkVersion = updated.version;
 });
 
-test('todos: list (only own)', async () => {
-  const list = await api.listTodos();
-  assert.ok(list.length >= 1);
-  assert.ok(list.every(t => t.userId === 'testuser@example.com'));
+test('a stale pantry update is rejected as a conditional conflict', async () => {
+  await assert.rejects(
+    () => api.updatePantryItem(milkItemId, 1, { quantity: 3 }),
+    (error: any) => /ConditionalCheckFailed|conditional request failed/i.test(`${error.name} ${error.message}`),
+  );
 });
 
-test('todos: list sorted by priority (secondary index)', async () => {
-  // Create todos with different priorities
-  await api.createTodo('Low priority task', 3);
-  await api.createTodo('High priority task', 1);
+test('outcomes archive reversibly without deleting pantry history', async () => {
+  const consumed = await api.setPantryOutcome(milkItemId, milkVersion, 'consumed');
+  assert.strictEqual(consumed.state, 'consumed');
+  assert.strictEqual(consumed.version, 3);
+  milkVersion = consumed.version;
 
-  const sorted = await api.listTodos('priority');
-  assert.ok(sorted.length >= 2);
-  // Priority 1 (high) should come before priority 3 (low)
-  const priorities = sorted.map(t => t.priority);
-  for (let i = 1; i < priorities.length; i++) {
-    assert.ok(priorities[i] >= priorities[i - 1], 'Should be sorted by priority ascending');
-  }
+  const active = await api.listPantryItems(false);
+  assert.ok(!active.some((item) => item.itemId === milkItemId));
+
+  const archived = await api.listPantryItems(true);
+  assert.strictEqual(archived.find((item) => item.itemId === milkItemId)?.state, 'consumed');
+
+  const restored = await api.restorePantryItem(milkItemId, milkVersion);
+  assert.strictEqual(restored.state, 'active');
+  assert.strictEqual(restored.version, 4);
+  assert.ok((await api.listPantryItems(false)).some((item) => item.itemId === milkItemId));
+
+  const consumedAgain = await api.setPantryOutcome(milkItemId, restored.version, 'consumed');
+  milkVersion = consumedAgain.version;
 });
 
-test('todos: list sorted by title (secondary index)', async () => {
-  const sorted = await api.listTodos('title');
-  assert.ok(sorted.length >= 2);
-  const titles = sorted.map(t => t.title);
-  for (let i = 1; i < titles.length; i++) {
-    assert.ok(titles[i] >= titles[i - 1], 'Should be sorted by title ascending');
-  }
+test('user B cannot list or update user A pantry data', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  await createConfirmedTestUser('pantry-b@example.com');
+
+  assert.deepStrictEqual(await api.listPantryItems(true), []);
+  await assert.rejects(
+    () => api.updatePantryItem(milkItemId, milkVersion, { quantity: 4 }),
+    (error: any) => /not found/i.test(error.message),
+  );
+  assert.deepStrictEqual(await api.listPantryItems(true), []);
 });
-
-test('todos: toggle completion', async () => {
-  const [todo] = await api.listTodos();
-  await api.toggleTodo(todo.todoId);
-
-  const updated = (await api.listTodos()).find(t => t.todoId === todo.todoId);
-  assert.strictEqual(updated?.completed, !todo.completed);
-  assert.strictEqual(updated?.version, todo.version + 1);
-});
-
-test('todos: delete', async () => {
-  const before = await api.listTodos();
-  const target = before[0];
-  await api.deleteTodo(target.todoId);
-
-  const after = await api.listTodos();
-  assert.ok(!after.some(t => t.todoId === target.todoId));
-});
-
-// ─── Conditional writes (optimistic locking) ──────────────────────────────────
-
-test('todos: concurrent toggle → conflict → retry succeeds', async () => {
-  // Create a fresh todo
-  const todo = await api.createTodo('Conflict test');
-
-  // Simulate a concurrent write by toggling twice "simultaneously"
-  // First toggle succeeds (version 1 → 2)
-  await api.toggleTodo(todo.todoId);
-
-  // Read current state
-  const current = (await api.listTodos()).find(t => t.todoId === todo.todoId);
-  assert.strictEqual(current?.version, 2);
-
-  // Toggle again — should succeed because we're reading fresh version
-  await api.toggleTodo(todo.todoId);
-  const final = (await api.listTodos()).find(t => t.todoId === todo.todoId);
-  assert.strictEqual(final?.version, 3);
-  assert.strictEqual(final?.completed, todo.completed); // toggled twice = back to original
-
-  // Cleanup
-  await api.deleteTodo(todo.todoId);
-});
-
-// ─── Realtime ─────────────────────────────────────────────────────────────────
-// Note: Realtime subscription tests require the middleware to be loaded,
-// which happens automatically when the dev server regenerates client.js.
-// For a manual test: run `npm run dev`, open two browser tabs, and create
-// a todo in one — it should appear in the other immediately.

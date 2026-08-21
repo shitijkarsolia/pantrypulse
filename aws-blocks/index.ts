@@ -1,140 +1,175 @@
-/**
- * Backend — aws-blocks/index.ts
- *
- * Real-time todo app with per-user isolation, optimistic locking, and secondary indexes.
- *
- * This file defines your API, auth, data model, and real-time channels.
- * The frontend imports these exports directly via `import { ... } from 'aws-blocks'`.
- *
- * ─── IMPORTANT ───────────────────────────────────────────────────────────────
- * Do NOT use local files, in-memory arrays, or local databases for persistence.
- * Use Building Blocks for cloud persistence and other common cloud abstractions.
- * They work locally with automatic mocks and deploy to AWS with zero configuration.
- *
- * For the full list of blocks and how to use them, see:
- *   node_modules/@aws-blocks/blocks/README.md
- * ─────────────────────────────────────────────────────────────────────────────
- */
-import { ApiNamespace, Scope, AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
+import {
+  ApiNamespace,
+  AuthCognito,
+  DistributedTable,
+  Logger,
+  Metrics,
+  Scope,
+} from '@aws-blocks/blocks';
+import type { AuthCognitoMockOptions } from '@aws-blocks/bb-auth-cognito';
 import { z } from 'zod';
+import {
+  pantryItemInputSchema,
+  pantryItemPatchSchema,
+  type PantryItemInput,
+  type PantryItemPatch,
+} from '../shared/contracts';
+import { createPantryRepository } from './storage/pantry';
+import { entitySchema } from './storage/schemas';
 
-const scope = new Scope('my-app');
+const scope = new Scope('pantrypulse');
 
-// ─── Auth ────────────────────────────────────────────────────────────────────
-const auth = new AuthBasic(scope, 'auth', {
-  passwordPolicy: { minLength: 8 },
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
+const logger = new Logger(scope, 'logger', {
+  level: process.env.BLOCKS_STACK_NAME ? 'info' : 'debug',
+  retention: 14,
+  defaultContext: { application: 'PantryPulse' },
 });
+
+const metrics = new Metrics(scope, 'metrics', {
+  namespace: 'PantryPulse',
+  defaultDimensions: { Environment: process.env.BLOCKS_STACK_NAME ? 'aws' : 'local' },
+});
+
+let lastCode: { username: string; code: string; purpose: string } | null = null;
+
+const authOptions = {
+  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
+  signInWith: 'email' as const,
+  authFlowType: 'USER_PASSWORD_AUTH' as const,
+  passwordPolicy: {
+    minLength: 12,
+    requireDigits: true,
+    requireLowercase: true,
+    requireUppercase: true,
+    requireSymbols: true,
+  },
+  mfa: 'off' as const,
+  selfSignUp: true,
+  sessionTtlSeconds: 3600,
+  removalPolicy: process.env.BLOCKS_SANDBOX === 'true' ? 'destroy' as const : 'retain' as const,
+  codeDelivery: async (username, code, purpose) => {
+    if (!process.env.BLOCKS_STACK_NAME) lastCode = { username, code, purpose };
+  },
+} satisfies AuthCognitoMockOptions;
+
+const auth = new AuthCognito(scope, 'auth', authOptions);
 export const authApi = auth.createApi();
 
-// ─── Data ────────────────────────────────────────────────────────────────────
-// Zod schema = runtime validation + TypeScript types + DynamoDB table shape.
-const todoSchema = z.object({
-  userId: z.string(),       // partition key — per-user isolation
-  todoId: z.string(),       // sort key — unique within a user
-  title: z.string(),
-  completed: z.boolean(),
-  priority: z.number(),     // 1=high, 2=medium, 3=low
-  version: z.number(),      // optimistic locking — incremented on each update
-  createdAt: z.number(),
-});
-
-const todos = new DistributedTable(scope, 'todos', {
-  schema: todoSchema,
-  key: { partitionKey: 'userId', sortKey: 'todoId' },
+const data = new DistributedTable(scope, 'pantry-data', {
+  schema: entitySchema,
+  key: { partitionKey: 'userSub', sortKey: 'entityId' },
   indexes: {
-    // Secondary indexes: query todos sorted by priority or title.
-    // The partition key is always userId (per-user isolation), the sort key varies.
-    byPriority: { partitionKey: 'userId', sortKey: 'priority' },
-    byTitle: { partitionKey: 'userId', sortKey: 'title' },
+    byType: { partitionKey: 'userSub', sortKey: 'entityType' },
+    byDate: { partitionKey: 'userSub', sortKey: 'sortDate' },
   },
+  ttl: 'cleanupAt',
 });
 
-// ─── Realtime ────────────────────────────────────────────────────────────────
-const rt = new Realtime(scope, 'live', {
-  namespaces: {
-    todos: Realtime.namespace(z.object({
-      action: z.enum(['created', 'updated', 'deleted']),
-      todoId: z.string(),
-    })),
-  },
+const pantry = createPantryRepository({
+  get: (key) => data.get(key),
+  put: (item, options) => data.put(item, options),
+  queryPantryItems: (userSub) => data.query({
+    index: 'byType',
+    where: {
+      userSub: { equals: userSub },
+      entityType: { equals: 'PANTRY_ITEM' },
+    },
+  }),
 });
 
-// ─── API ─────────────────────────────────────────────────────────────────────
+const itemIdSchema = z.string().min(1).max(200);
+const versionSchema = z.number().int().positive();
+const outcomeSchema = z.enum(['consumed', 'discarded']);
+
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-
-  async subscribeTodos() {
-    const user = await auth.requireAuth(context);
-    return rt.getChannel('todos', user.username);
-  },
-
-  async createTodo(title: string, priority: number = 2) {
-    const user = await auth.requireAuth(context);
-    const todoId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const todo = {
-      userId: user.username,
-      todoId,
-      title,
-      completed: false,
-      priority,
-      version: 1,
-      createdAt: Date.now(),
-    };
-    await todos.put(todo);
-    await rt.publish('todos', user.username, { action: 'created' as const, todoId });
-    return todo;
-  },
-
-  /** List todos, optionally sorted by a secondary index. */
-  async listTodos(sortBy?: 'priority' | 'title') {
-    const user = await auth.requireAuth(context);
-    if (sortBy) {
-      const index = sortBy === 'priority' ? 'byPriority' : 'byTitle';
-      return await Array.fromAsync(
-        todos.query({ index, where: { userId: { equals: user.username } } })
-      );
-    }
-    // Default: sorted by todoId (creation order)
-    return await Array.fromAsync(
-      todos.query({ where: { userId: { equals: user.username } } })
-    );
+  async ping() {
+    return { status: 'ok' as const };
   },
 
   /**
-   * Toggle todo completion with optimistic locking.
-   * Uses `ifFieldEquals` to detect concurrent writes. On conflict,
-   * throws ConditionalCheckFailedException — caller should re-read and retry.
+   * @blocksSkipCodegen
    */
-  async toggleTodo(todoId: string) {
-    const user = await auth.requireAuth(context);
-    const todo = await todos.get({ userId: user.username, todoId });
-    if (!todo) throw new Error('Todo not found');
-    await todos.put(
-      { ...todo, completed: !todo.completed, version: todo.version + 1 },
-      { ifFieldEquals: { version: todo.version } },
-    );
-    await rt.publish('todos', user.username, { action: 'updated' as const, todoId });
-    return { success: true };
+  async getLastCode() {
+    if (process.env.BLOCKS_STACK_NAME) return null;
+    return lastCode;
   },
 
-  /** Update a todo's priority with optimistic locking. */
-  async updatePriority(todoId: string, priority: number) {
+  async createPantryItem(input: PantryItemInput) {
     const user = await auth.requireAuth(context);
-    const todo = await todos.get({ userId: user.username, todoId });
-    if (!todo) throw new Error('Todo not found');
-    await todos.put(
-      { ...todo, priority, version: todo.version + 1 },
-      { ifFieldEquals: { version: todo.version } },
-    );
-    await rt.publish('todos', user.username, { action: 'updated' as const, todoId });
-    return { success: true };
+    const userSub = user.userId;
+    const parsedInput = pantryItemInputSchema.parse(input);
+    const item = await pantry.create(userSub, parsedInput);
+    logger.info('Pantry operation', {
+      operation: 'createPantryItem',
+      itemId: item.itemId,
+      status: 'success',
+    });
+    metrics.emit('PantryItemCreated', 1, { unit: 'Count' });
+    return item;
   },
 
-  /** Delete a todo. Broadcasts 'deleted' to all connected clients. */
-  async deleteTodo(todoId: string) {
+  async listPantryItems(includeArchived?: boolean) {
     const user = await auth.requireAuth(context);
-    await todos.delete({ userId: user.username, todoId });
-    await rt.publish('todos', user.username, { action: 'deleted' as const, todoId });
-    return { success: true };
+    const userSub = user.userId;
+    const parsedIncludeArchived = z.boolean().default(false).parse(includeArchived);
+    const items = await pantry.list(userSub, parsedIncludeArchived);
+    logger.info('Pantry operation', {
+      operation: 'listPantryItems',
+      status: 'success',
+    });
+    return items;
+  },
+
+  async updatePantryItem(itemId: string, expectedVersion: number, patch: PantryItemPatch) {
+    const user = await auth.requireAuth(context);
+    const userSub = user.userId;
+    const parsedItemId = itemIdSchema.parse(itemId);
+    const parsedVersion = versionSchema.parse(expectedVersion);
+    const parsedPatch = pantryItemPatchSchema.parse(patch);
+    const item = await pantry.update(userSub, parsedItemId, parsedVersion, parsedPatch);
+    logger.info('Pantry operation', {
+      operation: 'updatePantryItem',
+      itemId: item.itemId,
+      status: 'success',
+    });
+    metrics.emit('PantryItemUpdated', 1, { unit: 'Count' });
+    return item;
+  },
+
+  async setPantryOutcome(
+    itemId: string,
+    expectedVersion: number,
+    outcome: 'consumed' | 'discarded',
+  ) {
+    const user = await auth.requireAuth(context);
+    const userSub = user.userId;
+    const parsedItemId = itemIdSchema.parse(itemId);
+    const parsedVersion = versionSchema.parse(expectedVersion);
+    const parsedOutcome = outcomeSchema.parse(outcome);
+    const item = await pantry.setOutcome(userSub, parsedItemId, parsedVersion, parsedOutcome);
+    logger.info('Pantry operation', {
+      operation: 'setPantryOutcome',
+      itemId: item.itemId,
+      status: 'success',
+    });
+    metrics.emit(parsedOutcome === 'consumed' ? 'PantryItemConsumed' : 'PantryItemDiscarded', 1, {
+      unit: 'Count',
+    });
+    return item;
+  },
+
+  async restorePantryItem(itemId: string, expectedVersion: number) {
+    const user = await auth.requireAuth(context);
+    const userSub = user.userId;
+    const parsedItemId = itemIdSchema.parse(itemId);
+    const parsedVersion = versionSchema.parse(expectedVersion);
+    const item = await pantry.restore(userSub, parsedItemId, parsedVersion);
+    logger.info('Pantry operation', {
+      operation: 'restorePantryItem',
+      itemId: item.itemId,
+      status: 'success',
+    });
+    metrics.emit('PantryItemUpdated', 1, { unit: 'Count' });
+    return item;
   },
 }));
