@@ -13,8 +13,10 @@ The primary tagline is: **Your kitchen knows what's for dinner before you do.**
 - Make expiry urgency immediately understandable through an animated dashboard.
 - Generate practical rescue recipes from ingredients that need attention.
 - Provide a polished mobile-friendly demo with light and dark themes.
+- Maximize eligible challenge credits with complete dark-mode coverage and a produced 60-second walkthrough video.
 - Deploy a verifiable full-stack application to us-east-2.
-- Produce documentation suitable for the Full Stack Challenge submission.
+- Produce a finished Builder Center blog post suitable for the Full Stack Challenge submission.
+- Create a private GitHub repository and push the complete source history to it.
 
 ## Non-Goals
 
@@ -157,15 +159,22 @@ All bodies are schema-validated. Errors use a stable JSON envelope with request 
 
 Deployment uses the pantrypulse CLI profile. Outputs include the CloudFront URL, API endpoint, Cognito identifiers, and resource names needed by frontend configuration. Credentials are never committed.
 
+### Source Publishing
+
+A private GitHub repository named pantrypulse is created under the authenticated GitHub profile. The local main branch and complete project history are pushed to its origin. Repository visibility is verified as private after the push.
+
+The private repository is acceptable because the challenge article links to the working deployed application. The article does not imply that readers can access private source.
+
 The final handoff includes:
 
 - Live application URL.
 - Source, architecture, deployment, and cleanup documentation.
-- A Builder Center article draft of at least 500 words.
-- A 60-second demo script and shot list.
+- A finished Builder Center article of at least 500 words, ready to paste and publish.
+- A Remotion-rendered 60-second walkthrough video built from real deployed-app captures, with timed captions, script, and shot list.
+- Clear instructions for hosting and embedding the video in the article.
 
 The free-plan deployment uses on-demand serverless resources and avoids idle compute. After deployment, the user chooses whether to retain resources for judging or clean them up.
 
 ## Acceptance Criteria
 
-PantryPulse is complete when an authenticated user can manage an isolated pantry, upload and confirm image-derived items, generate and save a rescue recipe, switch themes, and use the app on mobile and desktop through CloudFront. Automated checks and live smoke tests pass, and deployment plus submission documentation is present.
+PantryPulse is complete when an authenticated user can manage an isolated pantry, upload and confirm image-derived items, generate and save a rescue recipe, and use the app on mobile and desktop through CloudFront. Light and dark modes work across every route and are covered by automated checks. Live smoke tests pass. The private GitHub repository contains the final main branch, the finished article is ready to publish, and the Remotion walkthrough is rendered with embedding instructions.
