@@ -2,6 +2,7 @@ import {
   ApiNamespace,
   AuthCognito,
   DistributedTable,
+  FileBucket,
   Logger,
   Metrics,
   Scope,
@@ -11,10 +12,17 @@ import { z } from 'zod';
 import {
   pantryItemInputSchema,
   pantryItemPatchSchema,
+  recipeRequestSchema,
+  recipeSchema,
   type PantryItemInput,
   type PantryItemPatch,
+  type Recipe,
+  type RecipeRequest,
 } from '../shared/contracts';
+import { createAiService } from './ai/service';
 import { createPantryRepository } from './storage/pantry';
+import { createRecipeRepository } from './storage/recipes';
+import { createScanRepository } from './storage/scans';
 import { entitySchema } from './storage/schemas';
 
 const scope = new Scope('pantrypulse');
@@ -28,6 +36,17 @@ const logger = new Logger(scope, 'logger', {
 const metrics = new Metrics(scope, 'metrics', {
   namespace: 'PantryPulse',
   defaultDimensions: { Environment: process.env.BLOCKS_STACK_NAME ? 'aws' : 'local' },
+});
+
+const uploads = new FileBucket(scope, 'uploads', {
+  corsRules: [{
+    allowedOrigins: [process.env.PANTRY_ALLOWED_ORIGIN || 'http://localhost:3000'],
+    allowedMethods: ['PUT', 'HEAD'],
+    allowedHeaders: ['content-type'],
+    maxAge: 600,
+  }],
+  lifecycleRules: [{ prefix: 'uploads/', expirationDays: 1 }],
+  removalPolicy: process.env.BLOCKS_SANDBOX === 'true' ? 'destroy' : 'retain',
 });
 
 let lastCode: { username: string; code: string; purpose: string } | null = null;
@@ -77,9 +96,32 @@ const pantry = createPantryRepository({
   }),
 });
 
+const ai = createAiService();
+const scans = createScanRepository({
+  table: {
+    get: (key) => data.get(key),
+    put: (item, options) => data.put(item, options),
+  },
+  bucket: uploads,
+  ai,
+});
+const recipes = createRecipeRepository({
+  table: {
+    put: (item, options) => data.put(item, options),
+    queryRecipes: (userSub) => data.query({
+      index: 'byType',
+      where: {
+        userSub: { equals: userSub },
+        entityType: { equals: 'RECIPE' },
+      },
+    }),
+  },
+});
+
 const itemIdSchema = z.string().min(1).max(200);
 const versionSchema = z.number().int().positive();
 const outcomeSchema = z.enum(['consumed', 'discarded']);
+const scanIdSchema = z.string().min(1).max(200);
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async ping() {
@@ -171,5 +213,38 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     metrics.emit('PantryItemUpdated', 1, { unit: 'Count' });
     return item;
+  },
+
+  async createScanUpload(contentType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif') {
+    const user = await auth.requireAuth(context);
+    return scans.createUpload(user.userSub, contentType);
+  },
+
+  async analyzeScan(scanId: string) {
+    const user = await auth.requireAuth(context);
+    const parsedScanId = scanIdSchema.parse(scanId);
+    const candidates = await scans.analyze(user.userSub, parsedScanId);
+    logger.info('Scan operation', { operation: 'analyzeScan', status: 'success' });
+    return candidates;
+  },
+
+  async generateRecipe(input: RecipeRequest) {
+    await auth.requireAuth(context);
+    const parsedInput = recipeRequestSchema.parse(input);
+    const recipe = recipeSchema.parse(await ai.generateRecipe(parsedInput));
+    logger.info('Recipe operation', { operation: 'generateRecipe', status: 'success' });
+    metrics.emit('RecipeGenerated', 1, { unit: 'Count' });
+    return recipe;
+  },
+
+  async saveRecipe(recipe: Recipe) {
+    const user = await auth.requireAuth(context);
+    const parsedRecipe = recipeSchema.parse(recipe);
+    return recipes.save(user.userSub, parsedRecipe);
+  },
+
+  async listRecipes() {
+    const user = await auth.requireAuth(context);
+    return recipes.list(user.userSub);
   },
 }));

@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import * as iam from 'aws-cdk-lib/aws-iam';
 
 import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,23 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   backendCDKPath: join(__dirname, 'index.ts'),
   defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,
 });
+
+const modelId = 'amazon.nova-2-lite-v1:0';
+blocksStack.handler.addEnvironment('PANTRY_MODEL_ID', modelId);
+
+const modelArn = cdk.Stack.of(blocksStack).formatArn({
+  service: 'bedrock',
+  region: cdk.Stack.of(blocksStack).region,
+  account: '',
+  resource: 'foundation-model',
+  resourceName: modelId,
+  arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+});
+
+blocksStack.handler.addToRolePolicy(new iam.PolicyStatement({
+  actions: ['bedrock:InvokeModel'],
+  resources: [modelArn],
+}));
 
 if (sandboxMode) {
   // Tell the runtime that cookies need cross-domain attributes (frontend on

@@ -18,9 +18,15 @@ let api: typeof ApiType;
 let authApi: typeof AuthApiType;
 let milkItemId = '';
 let milkVersion = 0;
+let userAScanId = '';
 
 function resetLocalTestData(): void {
-  for (const fullId of ['pantrypulse-auth', 'pantrypulse-auth-sessions', 'pantrypulse-pantry-data']) {
+  for (const fullId of [
+    'pantrypulse-auth',
+    'pantrypulse-auth-sessions',
+    'pantrypulse-pantry-data',
+    'pantrypulse-uploads',
+  ]) {
     rmSync(join(process.cwd(), '.bb-data', fullId), { recursive: true, force: true });
   }
 }
@@ -109,6 +115,18 @@ test('pantry rejects list access while signed out', async () => {
     () => api.listPantryItems(),
     (error: any) => /Authentication|Session|NotAuthenticated|401/i.test(error.message),
   );
+  for (const operation of [
+    () => api.createScanUpload('text/plain' as 'image/jpeg'),
+    () => api.analyzeScan(''),
+    () => api.generateRecipe({ itemIds: [], servings: 0, maxMinutes: 0, dietaryPreferences: [] }),
+    () => api.saveRecipe({} as never),
+    () => api.listRecipes(),
+  ]) {
+    await assert.rejects(
+      operation,
+      (error: any) => /Authentication|Session|NotAuthenticated|401/i.test(error.message),
+    );
+  }
 });
 
 test('user A signs up through local confirmation and creates milk at version one', async () => {
@@ -173,6 +191,58 @@ test('outcomes archive reversibly without deleting pantry history', async () => 
   milkVersion = consumedAgain.version;
 });
 
+test('user A uploads a private image and receives validated local scan candidates', async () => {
+  await assert.rejects(
+    () => api.createScanUpload('application/pdf' as 'image/jpeg'),
+    (error: any) => /invalid|content|image/i.test(error.message),
+  );
+
+  const slot = await api.createScanUpload('image/jpeg');
+  assert.ok(slot.scanId);
+  assert.strictEqual(typeof slot.upload.upload, 'function', JSON.stringify({
+    slotKeys: Object.keys(slot),
+    uploadKeys: Object.keys(slot.upload),
+  }));
+  await slot.upload.upload(new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], {
+    type: 'image/jpeg',
+  }));
+
+  const candidates = await api.analyzeScan(slot.scanId);
+  assert.strictEqual(candidates.length, 1);
+  assert.strictEqual(candidates[0].name, 'Spinach');
+  assert.ok(candidates[0].confidence >= 0 && candidates[0].confidence <= 1);
+  userAScanId = slot.scanId;
+});
+
+test('scan analysis rejects uploaded images larger than six megabytes', async () => {
+  const slot = await api.createScanUpload('image/png');
+  await slot.upload.upload(new Blob([new Uint8Array(6 * 1024 * 1024 + 1)], { type: 'image/png' }));
+
+  await assert.rejects(
+    () => api.analyzeScan(slot.scanId),
+    (error: any) => /6 MB|too large/i.test(error.message),
+  );
+});
+
+test('user A generates, saves, and lists a validated rescue recipe', async () => {
+  const generated = await api.generateRecipe({
+    itemIds: [milkItemId],
+    servings: 2,
+    maxMinutes: 30,
+    dietaryPreferences: [],
+  });
+  assert.ok(generated.steps.length > 0);
+  assert.strictEqual(generated.servings, 2);
+
+  const saved = await api.saveRecipe(generated);
+  assert.ok(saved.recipeId);
+  assert.deepStrictEqual(saved.recipe, generated);
+
+  const recipes = await api.listRecipes();
+  assert.strictEqual(recipes[0].recipeId, saved.recipeId);
+  assert.deepStrictEqual(recipes[0].recipe, generated);
+});
+
 test('user B cannot list or update user A pantry data', async () => {
   await authApi.setAuthState({ action: 'signOut' });
   await createConfirmedTestUser('pantry-b@example.com');
@@ -182,5 +252,10 @@ test('user B cannot list or update user A pantry data', async () => {
     () => api.updatePantryItem(milkItemId, milkVersion, { quantity: 4 }),
     (error: any) => /not found/i.test(error.message),
   );
+  await assert.rejects(
+    () => api.analyzeScan(userAScanId),
+    (error: any) => /not found/i.test(error.message),
+  );
+  assert.deepStrictEqual(await api.listRecipes(), []);
   assert.deepStrictEqual(await api.listPantryItems(true), []);
 });

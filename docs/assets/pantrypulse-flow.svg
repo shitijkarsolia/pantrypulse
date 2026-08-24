@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 420" role="img" aria-labelledby="title desc">
+  <title id="title">PantryPulse product loop</title>
+  <desc id="desc">Four connected steps: Capture, Confirm, Prioritize, and Rescue.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7f0df"/>
+      <stop offset="1" stop-color="#efe1c2"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#173f33" flood-opacity=".12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b9782c"/>
+    </marker>
+  </defs>
+  <rect width="1440" height="420" rx="32" fill="url(#bg)"/>
+  <path d="M330 210H397M681 210H748M1032 210H1099" fill="none" stroke="#b9782c" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="80" width="260" height="260" rx="28" fill="#fffaf0"/>
+    <circle cx="142" cy="151" r="36" fill="#dce9d3"/>
+    <path d="M125 151h34M142 134v34" stroke="#1f5b47" stroke-width="6" stroke-linecap="round"/>
+    <text x="110" y="236" fill="#173f33" font-family="Manrope,Arial,sans-serif" font-size="27" font-weight="700">Capture</text>
+    <text x="110" y="274" fill="#5b675f" font-family="Manrope,Arial,sans-serif" font-size="18">Add an item or</text>
+    <text x="110" y="301" fill="#5b675f" font-family="Manrope,Arial,sans-serif" font-size="18">upload a photo</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="421" y="80" width="260" height="260" rx="28" fill="#fffaf0"/>
+    <circle cx="493" cy="151" r="36" fill="#f5dfb5"/>
+    <path d="m477 151 11 11 22-25" fill="none" stroke="#9b5e1a" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="461" y="236" fill="#173f33" font-family="Manrope,Arial,sans-serif" font-size="27" font-weight="700">Confirm</text>
+    <text x="461" y="274" fill="#5b675f" font-family="Manrope,Arial,sans-serif" font-size="18">Review detected</text>
+    <text x="461" y="301" fill="#5b675f" font-family="Manrope,Arial,sans-serif" font-size="18">ingredients</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="772" y="80" width="260" height="260" rx="28" fill="#fffaf0"/>
+    <circle cx="844" cy="151" r="36" fill="#f2d1c4"/>
+    <path d="M828 160c14-3 22-11 27-27 8 17 5 31-8 39-10 6-21 2-25-6" fill="none" stroke="#a44b32" stroke-width="5" stroke-linecap="round"/>
+    <text x="812" y="236" fill="#173f33" font-family="Manrope,Arial,sans-serif" font-size="27" font-weight="700">Prioritize</text>
+    <text x="812" y="274" fill="#5b675f" font-family="Manrope,Arial,sans-serif" font-size="18">Surface what needs</text>
+    <text x="812" y="301" fill="#5b675f" font-family="Manrope,Arial,sans-serif" font-size="18">attention first</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1123" y="80" width="260" height="260" rx="28" fill="#173f33"/>
+    <circle cx="1195" cy="151" r="36" fill="#e3ad58"/>
+    <path d="M1178 151h34M1184 141h22M1188 161h14" stroke="#173f33" stroke-width="5" stroke-linecap="round"/>
+    <text x="1163" y="236" fill="#fffaf0" font-family="Manrope,Arial,sans-serif" font-size="27" font-weight="700">Rescue</text>
+    <text x="1163" y="274" fill="#dce9d3" font-family="Manrope,Arial,sans-serif" font-size="18">Turn ingredients</text>
+    <text x="1163" y="301" fill="#dce9d3" font-family="Manrope,Arial,sans-serif" font-size="18">into a useful meal</text>
+  </g>
+</svg>
